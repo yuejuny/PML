@@ -1,0 +1,173 @@
+---
+title: Practical Machine Learning Week 4
+author: Eugene Y
+date: April 2, 2017
+output: html_document
+---
+
+```{r, include = FALSE}
+library(data.table)
+library(caret)
+library(dplyr)
+library(doMC)
+```
+
+# Summary
+One thing that people regularly do is quantify how much of 
+a particular activity they do, but they rarely quantify 
+how well they do it. In this project, the goal is
+to use data from accelerometers on 
+the belt, forearm, arm, and dumbell of 6 participants,
+to predict the manner in which they did the
+exercise. The 'classe' variable in the training set
+is the manner variable. 
+
+# Data Source
+The data for this project is from 
+http://groupware.les.inf.puc-rio.br/har.
+Thanks a lot to their generosity.
+
+```{r,cache=T,warning=F,include=T}
+trainURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testURL <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+download.file(trainURL,destfile = 'trainset.csv')
+download.file(testURL,destfile = 'testset.csv')
+training <- fread('trainset.csv', na.strings=c('NA','#DIV/0!',''))
+dim(training)
+testing <- fread('testset.csv', na.strings=c('NA','#DIV/0!',''))
+dim(testing)
+```
+
+The training set includes about 20K observations for 160 variables.
+The testing set has the same number of variables. I want to 
+see the data quality of the training set, before I can decide
+if I can use all the 160 variables for predicting.
+In addition, I also want to see the outcome variable "classe".
+
+```{r,cache=T,fig.width=7,fig.height=3, warning=F,message=F}
+qplot(data=training[,.(classe)],classe)
+NACounts <- colSums(is.na(training))   # count NA per column
+qplot(data=data.frame(NACounts),NACounts)
+```
+
+There are five types of outcomes, which are classified as
+A, B, C, D, and E. Out of the 160 variables, 100 variables
+are not useful because they include significant amount
+of missing (NA) data points. Therefore, I only want to take the 60
+columns as my new training set.
+
+```{r}
+to.be.removed <- names(NACounts[NACounts > 15000])
+new.trainingset <- training[,!(colnames(training) %in% to.be.removed),with=F]
+# remove column 'V1' because this column seems to be row number 
+new.trainingset[,V1:=NULL]
+```
+
+# Machine Learning Training and Validation
+The training data set includes close to 20K observations.
+My machine is very slow when it comes to 
+some machine learning algorithms, such as the
+random forests. So I only choose part of the training
+set as my training set.
+
+## Linear discriminant analysis
+
+```{r,cache=T,warning=F,message=F}
+set.seed(2344)
+prob <- c(0.2,0.7)
+LDA.accu <- rep(NA,length(prob))
+for(i in 1:length(prob)){
+  inTrain <- createDataPartition(new.trainingset$classe,p=prob[i],list=F)
+  TrainSet <- new.trainingset[inTrain,]
+  Validation <- new.trainingset[-inTrain,]
+  FitModel.LDA <- train(classe ~ ., method = 'lda', data = TrainSet)
+  predi <- predict(FitModel.LDA, newdata = Validation)
+  confM <- confusionMatrix(predi, Validation$classe)
+  # LDA accuracy
+  LDA.accu[i] <- confM$overall['Accuracy']
+}
+```
+
+## Classification trees
+
+```{r,cache=T,warning = F,message=F}
+set.seed(24)
+prob <- c(0.2,0.7)
+Rpart.accu <- rep(NA,length(prob))
+for(i in 1:length(prob)){
+  inTrain <- createDataPartition(new.trainingset$classe,p=prob[i],list=F)
+  TrainSet <- new.trainingset[inTrain,]
+  Validation <- new.trainingset[-inTrain,]
+  FitModel.Rpart <- train(classe ~ ., method = 'rpart', data = TrainSet)
+  predi <- predict(FitModel.Rpart, newdata = Validation)
+  confM <- confusionMatrix(predi, Validation$classe)
+  Rpart.accu[i] <- confM$overall['Accuracy']
+}
+
+```
+
+## Random forests
+
+Random forest seems to have high demand for computation
+resource. My computer runs very slow when it
+came to this section.
+
+```{r,cache=T,warning = F, message=F}
+set.seed(924)
+# This parallel processing package only works in UNIX
+registerDoMC(4)
+prob <- c(0.2,0.7)
+RF.accu <- rep(NA,length(prob))
+for(i in 1:length(prob)){
+  inTrain <- createDataPartition(new.trainingset$classe,p=prob[i],list=F)
+  TrainSet <- new.trainingset[inTrain,]
+  Validation <- new.trainingset[-inTrain,]
+  FitModel.RF <- train(classe ~ ., method = 'rf', data = TrainSet)
+  predi <- predict(FitModel.RF, newdata = Validation)
+  confM <- confusionMatrix(predi, Validation$classe)
+  RF.accu[i] <- confM$overall['Accuracy']
+}
+```
+
+## Generalized boosted regression models
+
+```{r,cache=T, warning = F, message=F}
+set.seed(98924)
+# This parallel processing package only works in UNIX
+registerDoMC(4)
+prob <- c(0.2,0.7)
+GBM.accu <- rep(NA,length(prob))
+for(i in 1:length(prob)){
+  inTrain <- createDataPartition(new.trainingset$classe,p=prob[i],list=F)
+  TrainSet <- new.trainingset[inTrain,]
+  Validation <- new.trainingset[-inTrain,]
+  FitModel.GBM <- train(classe ~ ., method = 'gbm', data = TrainSet)
+  predi <- predict(FitModel.GBM, newdata = Validation)
+  confM <- confusionMatrix(predi, Validation$classe)
+  GBM.accu[i] <- confM$overall['Accuracy']
+}
+```
+
+## Compare algorithms
+
+Prob 0.2 means that 20% of the
+data is used for training the model.
+Prob 0.7 means that 70% of the
+data is used for training the model.
+
+```{r,cache=T, fig.width=7,fig.height=3}
+DF <- data.frame(prob,GBM.accu, RF.accu,
+                 Rpart.accu, LDA.accu)
+DF
+```
+
+# Predict
+
+Random forest and generalized
+boosted model are prety accurate. 
+Now let me predict using both models.
+
+```{r}
+predict(FitModel.RF, newdata = testing)
+predict(FitModel.GBM, newdata = testing)
+```
